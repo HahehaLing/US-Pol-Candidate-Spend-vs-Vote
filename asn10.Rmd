@@ -1,0 +1,260 @@
+---
+title: "asn10: Politics are afoot!"
+author: "w203: Yue Ling"
+date: "10/31/2021"
+output: pdf_document
+---
+
+# The Setup 
+
+There is *a lot* of money that is spent in politics in Presidential election years. So far, estimates have the number at about $11,000,000,000 (11 billion USD). For context, in 2019 Twitter's annual revenue was about \$3,500,000,000 (3.5 billion USD). 
+
+# The work 
+
+Install the package, `fec16`. 
+
+```{r}
+## install.packages('fec16')
+```
+
+This package is a compendium  of spending and results from the 2016 election cycle. In this dataset are 9 different datasets that cover: 
+
+- `candidates`: candidate attributes, like their name, a unique id of the candidate, the election year under consideration, the office they're running for, etc. 
+- `results_house`: race attributes, like the name of the candidates running in the election, a unique id of the candidate, the number of `general_votes` garnered by each candidate, and other information. 
+- `campaigns`: financial information for each house & senate campaign. This includes a unique candidate id, the total receipts (how much came in the doors), and total disbursements (the total spent by the campaign), the total contributed by party central committees, and other information. 
+
+# Your task 
+
+Describe the relationship between spending on a candidate's behalf and the votes they receive.
+
+# Your work 
+
+- We want to keep this work *relatively* constrained, which is why we're providing you with data through the `fec16` package. It is possible to gather all the information from current FEC reports, but it would require you to make a series of API calls that would pull us away from the core modeling tasks that we want you to focus on instead. 
+- Throughout this assignment, limit yourself to functions that are  within the `tidyverse` family of packages: `dplyr`, `ggplot`, `patchwork`, and `magrittr` for wrangling and exploration and `base`, `stats`, `sandwich` and `lmtest` for modeling and testing. You do not *have* to use these packages; but try to limit yourself to using only these. 
+
+```{r load packages, message=FALSE}
+library(tidyverse)
+library(magrittr)
+library(ggplot2)
+library(patchwork)
+library(sandwich)
+library(lmtest)
+library(fec16)
+library(moments)
+library(car)
+
+
+theme_set(theme_minimal())
+knitr::opts_chunk$set(dpi = 300)
+```
+
+```{r load data}
+candidates    <- fec16::candidates
+results_house <- fec16::results_house
+campaigns     <- fec16::campaigns
+```
+
+## 1. What does the distribution of votes and of spending look like? 
+
+1. (3 points) In separate histograms, show both the distribution of votes (measured in `results_house$general_percent` for now) and spending (measured in `ttl_disb`).  Use a log transform if appropriate for each visualization.  How would you describe what you see in these two plots?
+
+```{r}
+library(gridExtra)
+
+p1 <- ggplot(data = results_house, aes(x = general_percent)) +
+  geom_histogram() +
+  labs(title = "Distribution of votes",y = "Count", x = 'percent votes')
+
+campaigns$ln_ttl_disb <- log(campaigns$ttl_disb + 1) #add a 1, so if 0 original data, after ln, still 0
+
+
+p2 <- ggplot(data = campaigns, aes(x = log(ln_ttl_disb))) +
+  geom_histogram() +
+  labs(title = "Total disbursements",y = "Count", x = 'ln(spending)')
+
+grid.arrange(p1, p2, nrow = 2)
+
+```
+
+### 1 Desribing histogram and distribution of the data
+
+The distribution of votes seem to have 3 peaks, with the majority of count being centred around 0 (most count), 0.35, and 0.65. There seems to be a right skew of the data. For the log of total disbursement, there seems to be a fairly normal distribution, but with a slight left skew. Majority of the data seems to be between 2 and 3 of the ln of spending. Note that the ln of spending had a 1 added to the original disbursement data so that the original 0 data values would not become -inf. The original 0 has practical significance as some candidates may be spending very little and still be able to get high votes. When we add a 1, the original data does not get distorted much (original data values are usually around 5 or 6 digits big) and the 0 in the original data (becomes 1) and after ln, retain their original 0 values.
+
+
+## 2. Exploring the relationship between spending and votes. 
+
+2. (3 points) Create a new dataframe by joining `results_house` and `campaigns` using the `inner_join` function from `dplyr`. (We use the format `package::function` -- so `dplyr::inner_join`.) 
+
+
+```{r}
+spend_votes <- dplyr::inner_join(results_house, campaigns)
+```
+
+```{r}
+summary(spend_votes$ttl_disb)
+```
+
+3. (3 points) Produce a scatter plot of `general_votes` on the y-axis and `ttl_disb` on the x-axis. What do you observe about the shape of the joint distribution? 
+
+### 3 General votes and spending 
+The distribution is mainly clustered in the bottom left side of the graph. This means that some transformation would probably be needed to spread out the data and clearly see the trends in the plot. Right now it seems as though candidates are usually spending lesser than $4e5. 
+
+After looking at the inner join dataframe, the length of the data does not match up with the previous data length, so I removed the duplicate values according to the candidate identification. 
+
+After doing a log transformation on the total spending on the x-axis, the data is more spread out and I am able to see a cleaner linear relationship.  
+
+```{r}
+spend_votes_p <- ggplot(data = spend_votes, aes(y = general_votes, x = ttl_disb)) +
+  geom_point() +
+  labs(title = "Spend and Vote", y = "general votes" , x = " total disbursements")
+
+spd_v_nodup <- spend_votes %>% 
+  group_by(cand_id) %>% 
+  filter (row_number() == 1)
+
+spend_votes_p_nodup <- ggplot(data = spd_v_nodup, aes(y = general_votes, x = ttl_disb)) +
+  geom_point() +
+  labs(title = "Spend and Vote (no dup)", y = "general votes" , x = " total disbursements")
+
+# spend_votes_p | spend_votes_p_nodup
+
+spd_v_nodup$ln_ttl_disb <- log(spd_v_nodup$ttl_disb + 1) #add a 1, so if 0 original data, after ln, still 0
+spend_votes_ln_p <- ggplot(data = spd_v_nodup, aes(y = general_votes , x = ln_ttl_disb)) +
+  geom_point() +
+  labs(title = "Spend and ln(Vote)", y = "general votes" , x = " ln of total disbursements")
+
+# spend_votes_p_nodup | spend_votes_ln_p
+
+grid.arrange(spend_votes_p, spend_votes_p_nodup, spend_votes_ln_p, ncol = 3)
+spend_votes_ln_p
+
+```
+
+4. (3 points) Create a new variable to indicate whether each individual is a "Democrat", "Republican" or "Other Party". 
+  - Here's an example of how you might use `mutate` and `case_when` together to create a variable. 
+
+```
+starwars %>%
+  select(name:mass, gender, species) %>%
+  mutate(
+  type = case_when(
+    height > 200 | mass > 200 ~ "large",
+    species == "Droid"        ~ "robot",
+    TRUE                      ~ "other"
+    )
+  )
+```
+
+Once you've produced the new variable, plot your scatter plot again, but this time adding an argument into the `aes()` function that colors the points by party membership.  What do you observe about the distribution of all three variables?
+
+```{r}
+spd_v_nodup$pty_id <- spd_v_nodup %>%
+  select(cand_pty_affiliation) %>%
+  mutate(
+  type = case_when(
+    cand_pty_affiliation == "DEM" ~ "DEM",
+    cand_pty_affiliation == "REP" ~ "REP",
+    TRUE ~ "OTHER"
+    )
+  )
+
+# spend_votes <- na.omit(spend_votes) // doesn't work bcuz removes all rows 
+# spend_votes_noNa <- spend_votes[complete.cases(,spend_votes$ttl_disb)] // couldn't get this to work 
+
+spend_votes_partyID_p <- ggplot(data = spd_v_nodup, aes(y = general_votes, x = ln_ttl_disb, 
+                                                        color = pty_id$type)) +
+  geom_point() +
+  labs(title = "Spending and vote relationship by party", y ="general votes" , x = "ln total disbursements" )
+
+spend_votes_partyID_p
+
+```
+
+### 4 Plot graphs according to party 
+Democrats and Republicans follow a fairly similar linear regression approximation. However, for the other candidates, there seems to be another line that can better approximates their spending and general votes acquired. The non-Democrats and non-Republican candidates tend to spend far less than the other two parties and usually receive less votes. 
+
+# Produce a Descriptive Model 
+
+5. (5 Points) Given your observations, produce a linear model that you think does a good job at describing the relationship between candidate spending and votes they receive. You should decide what transformation to apply to spending (if any), what transformation to apply to votes (if any) and also how to include the party affiliation.
+
+```{r}
+# #Note: ttl_disb has not been logged
+# spend_votes$ttl_disb[!is.finite(spend_votes$ttl_disb)] <- NA #remove the -inf values from log
+# na.omit(spend_votes$ttl_disb)
+
+
+m00 <- lm(general_votes ~ 1 + ln_ttl_disb , data = spd_v_nodup)
+
+m0 <- lm(general_votes ~ 1 + ln_ttl_disb + pty_id$type , data = spd_v_nodup)
+
+# m1 <- lm(general_votes ~ 1 + ln_ttl_disb + I(ln_ttl_disb^2) + pty_id$type , data = spd_v_nodup) #squaring spending becuz 
+#want to exaggerate the effect
+
+m2 <- lm(general_votes ~ 1 + ln_ttl_disb + pty_id$type + cand_ici, data = spd_v_nodup)
+
+m3 <- lm(general_votes ~ 1 + ln_ttl_disb + cand_ici, data = spd_v_nodup)
+
+# m4 <- lm(general_votes ~ 1 + ln_ttl_disb + cand_ici + debts_owed_by, data = spd_v_nodup)
+
+
+```
+6. (3 points) Evaluate the Large-Sample Linear Model Assumptions
+
+```{r, testing collinearity -- anything greater than 5 // collinearity concerning}
+#can also test collinearity with cor()// need the data from a matrix form tho
+
+# '''#define the variables we want to include in the correlation matrix
+# data <- mtcars[ , c("disp", "hp", "wt", "drat")]
+# 
+# #create correlation matrix
+# cor(data)'''
+
+vif(m0)
+# vif(m1)
+vif(m2)
+vif(m3)
+# vif(m4)
+```
+
+### 6 Large-sample linear model assumptions 
+The Large-sample Linear Model assumptions entails: a unique best linear predictor (blp) and the samples are identically distributed and independently sampled. 
+
+1) iid - probably not independent on each other, same party could get party committee contribution. Time could also effect how much parties are getting funding depending on their parties' popularity. Same party candidates may also attract the same donors. I am assuming every sample is identically distributed and are drawn from the same pool of candidates. If all the candidates are selected for this dataset, then this is the population and is identically distributed. One thing to note is that, the assumptions are usually not going to be perfectly satisfied in the real-world setting.
+
+2) unique blp - From the scatter plot, seems like a blp can be found as there does seem like a linear relationship between the ln of spending and votes received. Calculating the collinear dependence between the variables with vif() doesn't show values greater than 5. If vif() has variables with values greater than 5 then the coefficient estimates and p-values in the output regression unreliable . When values are between 1 (perfect non-collinearity) to 5, this is generally considered moderate correlation. There does not seem to have any high collinearity between the variables and therefore we assume the blp assumptions is satisfied. Intuitively, the party affiliation and the amount spent on election may be related as bigger parties would have more funding and donors simply because they have bigger supporter pools. 
+
+7. (3 points) Interpret the model coefficients you estimate.
+
+- Tasks to keep in mind as you're writing about your model: 
+    - At the time that you're writing and interpreting your regression coefficients you'll be *deep* in the analysis. Nobody will know more about the data than you do, at that point. *So, although it will feel tedious, be descriptive and thorough in describing your observations.* 
+    - It can be hard to strike the balance between: on the one hand,  writing enough of the technical underpinnings to know that your model meets the assumptions that it must; and, on the other hand, writing little enough about the model assumptions that the implications of the model can still be clear. We're starting this practice now, so that by the end of Lab 2 you will have had several chances to strike this balance.
+    
+```{r run f test, find best models with lowest rss values}
+anova(m00, m0, test= 'F') #m0 is the model that the question probably wants to know the most about 
+# anova(m00, m1, test= 'F')
+
+# anova(m0, m1, test = 'F') 
+
+anova(m2, m3, test = 'F') # m2 prob best model from the lowest rss  
+# anova(m2, m4, test = 'F') 
+# anova(m3,m4, test= 'F')
+```
+
+```{r, run coeftest}
+
+coeftest (m0, vcov = vcovHC )
+# coeftest (m1, vcov = vcovHC )
+coeftest (m2, vcov = vcovHC )
+# coeftest (m3, vcov = vcovHC )
+# coeftest (m4, vcov = vcovHC )
+
+```
+
+
+### 7 Interpret the model coefficients estimated
+
+For the linear model built with party affiliation and ln of spending to predict the votes received, the coefficients estimated for ln of spending is 15486 and the corresponding p-value of the null hypothesis (coefficient = 0 ) is < 2e-16. This means that the there is statistical significance (95% confidence) that the coefficient is not 0. The high value of the coefficient indicates that the variable of spending has strong predictive power for the model in predicting candidates' vote received. For a x%, where x could be negative or 0 or positive, change in spending, the predicting change in votes received would be (x%'s decimal value) * 15486 more. Party affiliation, particularly the 'other' party members also have a small p value that rejected the null hypothesis that the coefficient is 0. The negative coefficient indicates that, all else equal, for a party member being a non-Republican and non-Democrat, the predicted vote outcome will be contributing to a -55738.6 prediction of votes received.
+
+The better the model is, the smaller the RSS value is. However, one need to balance the benefit of reducing RSS and the risk of overfitting and computation and storage needed for more variables in a model. My best model (RSS: 2.1818e+12) is the model with candidate incumbency, party affiliation, and ln(spending) as the independent variables for predicting the votes received. My baseline model with independent variables being candidate party affiliation and ln(spending) as the independent variables have a RSS: 2.6756e+12.
+
+The best model I made is the m2 model, where votes received was predicted with candidate incumbency status and ln(spending). If the candidate is an incumbent, the p-value of the null hypothesis is < 2.2e-16, which means the null hypothesis of coefficient = 0 is rejected with a 95% confidence. The coefficient estimate of 63649 means that, all else equal, if the candidate is an incumbent, their votes received will be higher by 63649 than those who are not. Similarly, the ln(spending) coefficient also rejected the null hypothesis of the coefficient is 0 and has an estimate value of 9898. This coefficient means that for every x% change in ln(spending), there would be a (x%'s decimal value) * 9898 increases in votes received. 
